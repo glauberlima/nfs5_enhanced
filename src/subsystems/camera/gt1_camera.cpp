@@ -13,9 +13,11 @@ namespace nfs5
     {
         // USA v3.5, the single call from mode 0's switch branch. Mode 1 and
         // the other camera dispatch cases are not redirected.
-        constexpr std::uintptr_t MODE0_CALL = 0x00463E7D;
-        constexpr std::uintptr_t VANILLA_MODE0 = 0x00461D50;
-        constexpr std::uintptr_t CAMERA_STYLE0 = 0x005CF620;
+        constexpr game::GameAddr MODE0_CALL = 0x00463E7D;
+        constexpr game::GameAddr VANILLA_MODE0 = 0x00461D50;
+        constexpr game::GameAddr CAMERA_STYLE0 = 0x005CF620;
+        constexpr game::GameAddr MODE0_BODY_A = 0x00461D94;
+        constexpr game::GameAddr MODE0_BODY_B = 0x00461DA1;
 
         // Known GT1 drivercamposstyle0, read from gt1.tpg and confirmed in
         // running-game samples. Conservative data signature: unknown/modified
@@ -29,7 +31,7 @@ namespace nfs5
         [[nodiscard]] bool HasGt1CameraData()
         {
             return std::memcmp(
-                reinterpret_cast<const void *>(CAMERA_STYLE0),
+                reinterpret_cast<const void *>(CAMERA_STYLE0.Get()),
                 GT1_STYLE0_POS.data(), GT1_STYLE0_POS.size()) == 0;
         }
 
@@ -42,8 +44,12 @@ namespace nfs5
         // This entry is called with one cdecl int, and must keep the game
         // routine's x86 stack/register layout exactly: it deliberately jumps
         // into the existing epilogue rather than returning here.
+        //
+        // The addresses below are link time values. The caller passes the image
+        // delta as a second cdecl argument, above the return address so the game
+        // code never sees it, and every absolute address adds it.
 #if defined(_MSC_VER) && defined(_M_IX86)
-        __declspec(naked) void __cdecl RestoredMode0(int)
+        __declspec(naked) void __cdecl RestoredMode0(int, int)
         {
             __asm {
                 sub esp, 018h
@@ -55,27 +61,31 @@ namespace nfs5
                 add eax, ebp
                 lea ebx, [ebp + eax * 2]
                 shl ebx, 2
-                movsx ecx, word ptr [ebx + 0627F3Ch]
+                mov edx, dword ptr [esp + 028h]
+                movsx ecx, word ptr [ebx + edx + 0627F3Ch]
                 shl ecx, 4
-                add ecx, 05CF610h
+                lea ecx, [ecx + edx + 05CF610h]
                 mov edx, dword ptr [ecx]
                 mov dword ptr [esp + 014h], edx
                 mov eax, dword ptr [ecx + 4]
                 mov dword ptr [esp + 018h], eax
-                mov eax, dword ptr ds:[0606A98h]
+                mov eax, dword ptr [esp + 028h]
+                mov eax, dword ptr [eax + 0606A98h]
                 mov ecx, dword ptr [ecx + 8]
                 test eax, eax
                 mov dword ptr [esp + 01Ch], ecx
                 jne fallthrough
-                mov eax, 0461DA1h
+                mov eax, dword ptr [esp + 028h]
+                add eax, 0461DA1h
                 jmp eax
             fallthrough:
-                mov eax, 0461D94h
+                mov eax, dword ptr [esp + 028h]
+                add eax, 0461D94h
                 jmp eax
             }
         }
 #elif defined(__GNUC__) && defined(__i386__)
-        __attribute__((naked)) void __cdecl RestoredMode0(int)
+        __attribute__((naked)) void __cdecl RestoredMode0(int, int)
         {
             __asm__ __volatile__(
                 ".intel_syntax noprefix\n\t"
@@ -88,22 +98,26 @@ namespace nfs5
                 "add eax, ebp\n\t"
                 "lea ebx, [ebp + eax * 2]\n\t"
                 "shl ebx, 2\n\t"
-                "movsx ecx, WORD PTR [ebx + 0x627f3c]\n\t"
+                "mov edx, DWORD PTR [esp + 0x28]\n\t"
+                "movsx ecx, WORD PTR [ebx + edx + 0x627f3c]\n\t"
                 "shl ecx, 4\n\t"
-                "add ecx, 0x5cf610\n\t"
+                "lea ecx, [ecx + edx + 0x5cf610]\n\t"
                 "mov edx, DWORD PTR [ecx]\n\t"
                 "mov DWORD PTR [esp + 0x14], edx\n\t"
                 "mov eax, DWORD PTR [ecx + 4]\n\t"
                 "mov DWORD PTR [esp + 0x18], eax\n\t"
-                "mov eax, DWORD PTR ds:0x606a98\n\t"
+                "mov eax, DWORD PTR [esp + 0x28]\n\t"
+                "mov eax, DWORD PTR [eax + 0x606a98]\n\t"
                 "mov ecx, DWORD PTR [ecx + 8]\n\t"
                 "test eax, eax\n\t"
                 "mov DWORD PTR [esp + 0x1c], ecx\n\t"
                 "jnz 1f\n\t"
-                "mov eax, 0x461da1\n\t"
+                "mov eax, DWORD PTR [esp + 0x28]\n\t"
+                "add eax, 0x461da1\n\t"
                 "jmp eax\n\t"
                 "1:\n\t"
-                "mov eax, 0x461d94\n\t"
+                "mov eax, DWORD PTR [esp + 0x28]\n\t"
+                "add eax, 0x461d94\n\t"
                 "jmp eax\n\t"
                 ".att_syntax prefix\n\t");
         }
@@ -125,7 +139,7 @@ namespace nfs5
         Gt1Camera & self = GetInstance();
         if (slot == 0 && HasGt1CameraData())
         {
-            RestoredMode0(slot);
+            RestoredMode0(slot, static_cast<int>(game::g_ImageDelta));
         }
         else
         {
@@ -141,8 +155,8 @@ namespace nfs5
         // Avoid patching unexpected executables or conflicting hooks.
         if (!hook::MatchBytes(MODE0_CALL, "E8 CE DE FF FF") ||
             !hook::MatchBytes(VANILLA_MODE0, "33 C9 EB 1D") ||
-            !hook::MatchBytes(0x00461D94, "A1 70 68 60 00 85 C0") ||
-            !hook::MatchBytes(0x00461DA1, "A1 D4 6A 60 00 85 C0"))
+            !hook::MatchBytes(MODE0_BODY_A, "A1 70 68 60 00 85 C0") ||
+            !hook::MatchBytes(MODE0_BODY_B, "A1 D4 6A 60 00 85 C0"))
         {
             LOG_WARN("GT1 camera: unsupported camera code or another camera patch; skipped");
             return;
