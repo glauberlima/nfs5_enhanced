@@ -1,0 +1,35 @@
+name: build
+
+# Builds the ASI and the DX11 driver for every pull request and every push to master.
+# Compile, link and warnings only: there are no automated tests and the game is not run.
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  msvc:
+    # Pinned so a new runner image with a newer compiler cannot turn the build red by itself.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A Win32 -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfs5_enhanced-msvc-release
+          path: |
+            build/Release/nfs5_enhanced.asi
+            build/Release/SDL3.dll
+            build/drivers/dx11/Release/dx11z.dll
+          if-no-files-found: error
